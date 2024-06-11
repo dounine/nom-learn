@@ -2,18 +2,28 @@ fn main() {
     println!("Hello, world!");
 }
 
+#[derive(Debug, Clone)]
+pub enum Json<'a> {
+    Null,
+    String(&'a str),
+    Number(f64),
+    Boolean(bool),
+    Array(Vec<Json<'a>>),
+    Object(Vec<(&'a str, Json<'a>)>),
+}
 
 #[cfg(test)]
 mod test {
     use std::error::Error;
     use nom::branch::alt;
-    use nom::bytes::complete::{tag, take, take_until, take_while, take_while_m_n};
-    use nom::character::complete::{alpha0, alphanumeric0, alphanumeric1, char, digit0, digit1, i32, multispace0, one_of, space1};
-    use nom::combinator::{map_res, recognize};
+    use nom::bytes::complete::{escaped, is_not, tag, take, take_till, take_until, take_while, take_while1, take_while_m_n};
+    use nom::character::complete::{alpha0, alphanumeric0, alphanumeric1, char, digit0, digit1, i32, multispace0, none_of, one_of, space1};
+    use nom::combinator::{cut, map, map_res, recognize, value};
     use nom::{IResult, Parser};
     use nom::error::ParseError;
     use nom::multi::{length_count, many0, many1};
     use nom::sequence::{delimited, preceded, separated_pair, terminated, Tuple};
+    use crate::Json;
 
     //识别字符串
     #[test]
@@ -160,38 +170,101 @@ mod test {
         let result: IResult<&str, &str> = preceded(
             alt((tag("0x"), tag("0X"))),
             recognize(
-                // 使用 `many1` 匹配一个或多个十六进制数字，
-                // 使用 `terminated` 组合器确保每个数字后面可以跟随零个或多个下划线。
                 many1(
                     terminated(one_of("0123456789abcdefABCDEF"), many0(char('_')))
                 )
             ),
         )("0x9c9c9c");
-        let (remaing,output) = result?;
+        let (remaing, output) = result?;
+        assert_eq!(remaing, "");
+        assert_eq!(output, "9c9c9c");
         Ok(())
     }
 
-    // #[test]
-    // fn test_ws() -> Result<(), Box<dyn Error>> {
-    //     let result: IResult<&str, &str> = ws(" hi ");
-    //     let (remaing,output) = result?;
-    // assert_eq!(remaing, "hi");
-    // Ok(())
-    // }
+    #[test]
+    fn test_number() -> Result<(), Box<dyn Error>> {
+        let num = tag("123");
+        let result = num("123abc") as IResult<&str, &str>;
+        let (remaing, output) = result?;
+        dbg!(remaing);
+        assert_eq!(remaing, "abc");
+        assert_eq!(output, "123");
+        Ok(())
+    }
 
-    fn ws<'a, F, O, E: ParseError<&'a str>>(inner: F) -> impl Parser<&'a str, O, E>
-        where
-            F: Parser<&'a str, O, E>,
-    {
-        // 使用 nom 提供的 delimited 函数，它接受三个参数：
-        // 1. 在 `inner` 前面要消耗的空白解析器，这里是 multispace0。
-        // 2. 要应用的实际解析器 `inner`。
-        // 3. 在 `inner` 后面要消耗的空白解析器，这里同样是 multispace0。
+    #[test]
+    fn test_not() -> Result<(), Box<dyn Error>> {
+        let result = terminated(is_not("岁"), tag("岁"))("18岁") as IResult<&str, &str>;
+        let (remaing, output) = result?;
+        assert_eq!(remaing, "");
+        assert_eq!(output, "18");
+        Ok(())
+    }
+
+    #[test]
+    fn test_string_parser() -> Result<(), Box<dyn Error>> {
+        let str = r#""name":"lake""#;
+        let mut string_inner = delimited(char('"'), take_until("\""), char('"'));
+        let result: IResult<&str, &str> = string_inner(str);
+        let (remaing, output) = result?;
+        assert_eq!(output, "name");
+        Ok(())
+    }
+
+    fn parse_boolean(input: &str) -> IResult<&str, Json> {
+        alt((value(Json::Boolean(true), tag("true")), value(Json::Boolean(false), tag("false"))))(input)
+    }
+
+    fn parse_str(i: &str) -> IResult<&str, &str> {
+        escaped(alphanumeric1, '\\', one_of("\"n\\"))(i)
+    }
+
+    fn parse_string(input: &str) -> IResult<&str, &str> {
+        // escaped(alphanumeric1, '\\', one_of("\"n\\"))(input)
         delimited(
-            multispace0,
-            inner,
-            multispace0,
-        )
+            char('"'),
+            take_until("\""),
+            char('"'),
+        )(input)
+    }
+
+    #[test]
+    fn test_parse_string() -> Result<(), Box<dyn Error>> {
+        let input = r#"He said, \"Hello!\""#;
+        let mut resource: IResult<&str, &str> =
+            escaped(
+                none_of(r#"\""#),
+                '\\',
+                one_of(r#"\"nrt"#),
+            )(input);
+        let (remaing, output) = resource?;
+        assert_eq!(remaing, "");
+        assert_eq!(output, input);
+        Ok(())
+    }
+
+    fn parse_number(input: &str) -> IResult<&str, Json> {
+        map_res(
+            recognize(
+                many1(
+                    one_of("0123456789.")
+                )
+            ),
+            |s: &str| {
+                s.parse::<f64>()
+                    .map(Json::Number)
+            },
+        )(input)
+    }
+
+    #[test]
+    fn test_parse_number() -> Result<(), Box<dyn Error>> {
+        let (remaing, output) = parse_number("12345.6")?;
+        assert_eq!(remaing, "");
+        Ok(())
+    }
+
+    fn parse_null(input: &str) -> IResult<&str, Json> {
+        value(Json::Null, tag("null"))(input)
     }
 }
-pub struct Name(String);
